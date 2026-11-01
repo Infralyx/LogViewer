@@ -1,0 +1,116 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: logviewer-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-logviewer}
+      POSTGRES_USER: ${POSTGRES_USER:-logviewer_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - logviewer_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  auth-api:
+    build:
+      context: .
+      dockerfile: services/auth_api/Dockerfile
+    container_name: logviewer-auth-api
+    environment:
+      SUPERADMIN_USERNAME: ${SUPERADMIN_USERNAME:-}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-}
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-1800}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      LDAP_SERVER_URI: ${LDAP_SERVER_URI:-}
+      LDAP_BASE_DN: ${LDAP_BASE_DN:-}
+      LDAP_USER_FILTER: ${LDAP_USER_FILTER:-}
+      LDAP_BIND_DN: ${LDAP_BIND_DN:-}
+      LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:-}
+      LDAP_USER_DN_TEMPLATE: ${LDAP_USER_DN_TEMPLATE:-}
+      LDAP_STARTTLS: ${LDAP_STARTTLS:-false}
+      LDAP_ALLOW_INSECURE: ${LDAP_ALLOW_INSECURE:-false}
+      LDAP_TLS_VALIDATE: ${LDAP_TLS_VALIDATE:-true}
+      LDAP_CA_CERT_FILE: ${LDAP_CA_CERT_FILE:-}
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-logviewer}
+      PGUSER: ${POSTGRES_USER:-logviewer_app}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./certs:/app/certs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  logs-api:
+    build:
+      context: .
+      dockerfile: services/logs_api/Dockerfile
+    container_name: logviewer-logs-api
+    environment:
+      VICTORIALOGS_URL: ${VICTORIALOGS_URL:-}
+      VICTORIALOGS_TIMEOUT: ${VICTORIALOGS_TIMEOUT:-30}
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-1800}
+    depends_on:
+      auth-api:
+        condition: service_healthy
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  download-api:
+    build:
+      context: .
+      dockerfile: services/download_api/Dockerfile
+    container_name: logviewer-download-api
+    environment:
+      VICTORIALOGS_URL: ${VICTORIALOGS_URL:-}
+      VICTORIALOGS_TIMEOUT: ${VICTORIALOGS_TIMEOUT:-30}
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-1800}
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-logviewer}
+      PGUSER: ${POSTGRES_USER:-logviewer_app}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      auth-api:
+        condition: service_healthy
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: logviewer-frontend
+    ports:
+      - "${LOGVIEWER_PORT:-8080}:80"
+    depends_on:
+      auth-api:
+        condition: service_healthy
+      logs-api:
+        condition: service_started
+      download-api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  logviewer_postgres_data:
